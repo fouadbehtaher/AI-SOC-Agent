@@ -8,12 +8,38 @@ LLM-friendly error handling and return values.
 from __future__ import annotations
 
 import concurrent.futures
+import re
 from typing import Any, Dict, List, Optional
 
 from ..core.errors import IntegrationError
 from ..core.logging import get_logger
 
 logger = get_logger("sami.orchestrator.tools_cti")
+
+
+_HASH_PATTERN = re.compile(r"[0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64}|[0-9a-f]{128}")
+
+
+def normalize_hash(hash_value: Any) -> str:
+    """
+    Validate and normalize a file hash before it is sent to any CTI platform.
+
+    Accepts MD5, SHA1, SHA256 and SHA512 as hex (surrounding whitespace and
+    upper case are tolerated). Anything else is rejected before a network call:
+    the value usually comes from an alert or from an LLM, and Local TIP's
+    POST /hashes creates a record for whatever it is given.
+
+    Raises:
+        IntegrationError: If the value is not a valid hash.
+    """
+    if not isinstance(hash_value, str):
+        raise IntegrationError("Invalid hash: expected a string")
+    cleaned = hash_value.strip().lower()
+    if not _HASH_PATTERN.fullmatch(cleaned):
+        raise IntegrationError(
+            "Invalid hash: expected 32 (MD5), 40 (SHA1), 64 (SHA256) or 128 (SHA512) hex characters"
+        )
+    return cleaned
 
 
 def lookup_hash_ti(
@@ -43,6 +69,8 @@ def lookup_hash_ti(
     Raises:
         IntegrationError: If all lookups fail.
     """
+    hash_value = normalize_hash(hash_value)
+
     # Determine which clients to use
     cti_clients = clients if clients is not None else ([client] if client is not None else [])
     
@@ -356,4 +384,3 @@ def _merge_cti_results(results: Dict[str, Dict[str, Any]], hash_value: str) -> D
                             merged["threat_score"] = indicator["score"]
     
     return merged
-
